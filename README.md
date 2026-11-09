@@ -30,6 +30,146 @@ The skill has `disable-model-invocation: true`, so it runs only when you type `/
 
 This writes `out/chart.mmd`, `out/report.md` and `out/tlc.out`. It exits with 0 when every rule holds, 1 when a rule breaks and 2 on an error.
 
+## Example: a checkout that can charge twice
+
+A **model** is a short, simplified description of how a system behaves. It keeps only what matters for the question you are asking. It lists:
+
+1. **what can be true at any moment** (the variables);
+2. **what can happen** (the actions), each with when it is allowed and what it changes;
+3. **what must never happen** (the rules).
+
+It leaves out the database, the HTTP layer and the UI. That is what lets TLC try every order of events in seconds. The files are in [`examples/checkout/`](examples/checkout/).
+
+### The system
+
+A checkout page has a Pay button. The server handles each press in two steps, as many real handlers do: first it loads the order and checks that it is unpaid, then it charges the card and marks the order paid. A double-click or a retry sends two requests.
+
+### The model: [`Checkout.tla`](examples/checkout/Checkout.tla)
+
+**What can be true:**
+
+```tla
+VARIABLES
+  order,    \* "unpaid" | "paid" | "failed"
+  charges,  \* how many times the card was charged
+  req       \* each request: "idle" | "checked" (passed step 1) | "done"
+```
+
+**What can happen.** Each action says when it can happen (the lines without a prime) and what it changes (the primed `'` variables are the values after the step). The two steps of the handler are two separate actions, because another request can run between them.
+
+```tla
+\* Step 1: the request loads the order and sees that it is unpaid.
+YouPressPay(r) ==
+  /\ req[r] = "idle"
+  /\ order = "unpaid"
+  /\ req' = [req EXCEPT ![r] = "checked"]
+  /\ UNCHANGED <<order, charges>>
+
+\* Step 2: charge the card. It does not look at the order again.
+ChargeSucceeds(r) ==
+  /\ req[r] = "checked"
+  /\ charges' = charges + 1
+  /\ order' = "paid"
+  /\ req' = [req EXCEPT ![r] = "done"]
+```
+
+The full file also has `ChargeFails`, `YouTryAgain` and a `Done` action for the end states. `Next` lists every action, so TLC names each step after its action.
+
+**What must never happen:**
+
+```tla
+ChargedAtMostOnce == charges <= 1
+PaidMeansCharged  == order = "paid" => charges >= 1
+```
+
+[`Checkout.cfg`](examples/checkout/Checkout.cfg) tells TLC which rules to check:
+
+```
+SPECIFICATION Spec
+INVARIANT ChargedAtMostOnce
+INVARIANT PaidMeansCharged
+```
+
+### The view: [`view.ts`](examples/checkout/view.ts)
+
+The view turns the model's raw states into words a shopper or product manager would use. Several model states can share one label.
+
+```ts
+export const state = (v) => {
+  const n = inFlight(v); // requests that passed step 1
+  if (v.order === "paid") return v.charges > 1 ? "Paid, charged twice" : "Paid";
+  if (v.order === "failed") return n ? "Payment failed, other request still paying" : "Payment failed";
+  if (n === 0) return "Unpaid";
+  return n === 1 ? "Paying" : "Paying (two requests)";
+};
+
+export const step = (action) =>
+  ({ YouPressPay: "you press Pay", ChargeSucceeds: "the charge goes through",
+     ChargeFails: "the charge fails", YouTryAgain: "you try again", Done: null })[action];
+```
+
+### The result
+
+```sh
+cd examples/checkout
+../../scripts/statechart Checkout.tla --view view.ts --out out
+```
+
+```
+TLC reached 15 states and 29 steps. The chart draws 7 states and 11 arrows.
+
+## ChargedAtMostOnce breaks
+The shortest path has 4 steps:
+0. Unpaid
+1. you press Pay: Paying
+2. you press Pay: Paying (two requests)
+3. the charge goes through: Paid
+4. the charge goes through: Paid, charged twice
+
+## Rules that hold
+PaidMeansCharged, NoDeadlock
+```
+
+Both requests pass the "is it unpaid?" check before either one charges, so both charge. The chart (`out/chart.mmd`, colors trimmed):
+
+```mermaid
+stateDiagram-v2
+  s0: Unpaid
+  s1: Paying
+  s2: Payment failed
+  s3: Paid
+  s4: Paying (two requests)
+  s5: Payment failed, other request still paying
+  s6: Paid, charged twice
+  [*] --> s0
+  s0 --> s1: you press Pay
+  s1 --> s2: the charge fails
+  s1 --> s3: the charge goes through
+  s1 --> s4: you press Pay
+  s2 --> s0: you try again
+  s4 --> s5: the charge fails
+  s4 --> s3: the charge goes through
+  s5 --> s1: you try again
+  s5 --> s2: the charge fails
+  s5 --> s3: the charge goes through
+  s3 --> s6: the charge goes through
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s6 breaks
+```
+
+### The fix
+
+In the code, the fix is to check the order again at the moment of charging, for example with a row lock or a conditional `UPDATE ... WHERE status = 'unpaid'`. In the model, `ChargeSucceeds` gets the guard `order = "unpaid"`, and a new action `AlreadyPaid` ends a request that finds the order already paid. Run again, every rule holds and the command exits with 0:
+
+```
+TLC reached 14 states and 26 steps. The chart draws 6 states and 9 arrows.
+
+## Rules that hold
+ChargedAtMostOnce, PaidMeansCharged, NoDeadlock
+```
+
+When a model finds a bug in real code, replay its path against that code as a failing test, one step for each action, before you trust it. A model is a hand-written copy of the code's logic, and the copy can be wrong.
+
 ## How the code works
 
 It is laid out like a small compiler: TLC's output goes in, a graph in memory is transformed in passes, and files come out. Read it in this order.
