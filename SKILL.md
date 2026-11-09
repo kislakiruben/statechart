@@ -10,15 +10,19 @@ The chart shows how a system moves between states, in the words of the person wh
 
 ## Run
 
-Work in a scratch folder outside the repo. Write a TLA+ spec and its config. Then run:
+Work in a scratch folder outside the repo: a folder in the session's scratchpad directory when there is one. Write a TLA+ spec and its config. Then run:
 
 ```sh
-<skill dir>/scripts/statechart SPEC.tla [--config FILE] [--view FILE] [--out DIR]
+~/.claude/skills/statechart/scripts/statechart SPEC.tla [--config FILE] [--view FILE] [--out DIR]
 ```
 
-`scripts/statechart.ts` is TypeScript, so run it with a runtime that can execute TypeScript.
+The launcher runs `scripts/statechart.ts` with Node 22.18+ (or 23.6+), Bun 1.1.5+ or Deno 2+, whichever it finds first.
 
-The first run installs TLC and Java with mise and needs the network.
+It needs TLC and Java, and runs both in Docker so the host needs no Java. `scripts/docker-java` stands in for `java`: on first use it builds the image `statechart-tlc:1.7.4` from `docker/Dockerfile` (Temurin 21 JRE plus a checksum-pinned `tla2tools.jar`), then runs each TLC call in a throwaway container with no network, mounting the spec folder, the temp folder and the current folder at their host paths. The first run needs the network and takes about half a minute. Later runs reuse the image.
+
+To use a local Java instead, set `TLA2TOOLS` to the path of `tla2tools.jar` and `JAVA` to a `java` binary (Java 11 or later). The launcher then skips Docker.
+
+If Docker is not running, ask the user to start it. Do not install Java yourself.
 
 ## Write the spec
 
@@ -73,10 +77,14 @@ Aim for about 20 arrows or fewer, because a busier chart is hard to read. First 
 
 Show `chart.mmd` to the user as a `mermaid` code block. The chart has a budget of 500 states, counted by TLC on the config as written. Above that, the chart draws only the paths to the rules that break, and when no rule breaks, the command writes no `chart.mmd`. It still checks each rule, and the report gives the state count and each bug path. To see the whole graph, make the model smaller.
 
-Render charts with Pele. When the user asks for an image, or a chart is too large to read as text, follow `references/render.md`. Do not use a different renderer unless the user asks for it.
+When the user asks for an image, or a chart is too large to read as text, follow `references/render.md`.
 
 ## Hand off
 
 Give each chart and its Mermaid text to the person who must decide. Add one line for each bug: the rule, the reader's sentence for that rule, and the path as the report numbers it. Say what the model leaves out. Give the command that makes the files again, with a new `--out` folder.
 
 When the model describes code, replay each bug path against the real code, as a test or a live repro, one step for each action. If a bug does not occur, think that the model is wrong until you show that it is not.
+
+## About this port
+
+Ported to Claude Code from cursor/plugins `pstack/skills/statechart` (MIT, commit 2776ddd, 2026-11-05). Changes: TLC and Java run in Docker (`scripts/docker-java`, `docker/Dockerfile`) in place of mise, and charts render as a Mermaid Artifact or through mermaid-cli in place of Pele (`references/render.md`). The rest of `scripts/` is unchanged.

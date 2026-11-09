@@ -1,0 +1,40 @@
+#!/bin/sh
+# A stand-in for `java` that runs it in Docker (Claude Code port). The
+# launcher sets JAVA to this script and TLA2TOOLS to /opt/tla/tla2tools.jar,
+# which exists only inside the image.
+#
+# TLC reads the spec and writes its output under absolute host paths (the
+# spec folder, a temp folder, the current folder), so each one is mounted at
+# the same path inside the container.
+set -eu
+image=statechart-tlc:1.7.4
+here=$(cd "$(dirname "$0")" && pwd -P)
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  docker build -q -t "$image" "$here/../docker" >&2
+fi
+
+# Each folder is mounted under the path TLC is given (macOS paths such as
+# /var/folders are symlinks into /private, which the container lacks).
+mounts=""
+add_mount() {
+  [ -d "$1" ] || return 0
+  case " $mounts " in *" $1 "*) return 0 ;; esac
+  mounts="$mounts $1"
+}
+add_mount "$PWD"
+add_mount "${TMPDIR:-/tmp}"
+add_mount /tmp
+# -DTLA-Library=<spec folder> and -Djava.io.tmpdir=<dir> name the other paths.
+for arg in "$@"; do
+  case $arg in
+    -DTLA-Library=*) add_mount "${arg#-DTLA-Library=}" ;;
+    -Djava.io.tmpdir=*) add_mount "$(dirname "${arg#-Djava.io.tmpdir=}")" ;;
+  esac
+done
+
+set -- --rm --init --network none --user "$(id -u):$(id -g)" -w "$PWD" "$image" java "$@"
+for m in $mounts; do
+  set -- -v "$(cd "$m" && pwd -P):$m" "$@"
+done
+exec docker run "$@"

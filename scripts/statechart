@@ -8,6 +8,12 @@ while [ -L "$self" ]; do
   esac
 done
 entry=$(dirname "$self")/statechart.ts
+# Claude Code port: unless TLA2TOOLS is set, run TLC and Java in Docker
+# (scripts/docker-java, image built from ../docker on first use).
+if [ -z "${TLA2TOOLS:-}" ]; then
+  export TLA2TOOLS=/opt/tla/tla2tools.jar
+  export JAVA="$(dirname "$self")/docker-java"
+fi
 version() {
   command -v "$1" >/dev/null || { echo 0; return; }
   "$1" --version 2>/dev/null | sed -n '1s/[^0-9]*\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\).*/\1 \2 \3/p' | {
